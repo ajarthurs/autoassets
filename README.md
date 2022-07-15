@@ -15,6 +15,7 @@ TODO: Create `setup.py`
 ```bash
 cp autoassets/templates/settings.py ${PWD}
 cp autoassets/templates/assets.json ${PWD}
+cp autoassets/templates/logging.yaml ${PWD}
 
 # Edit `settings.py` to setup the backend(s) such as setting API keys required for access, and write asset
 # classes to define combinations of trade vehicles, trade policies and their respective sources of data.

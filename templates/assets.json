@@ -1,0 +1,20 @@
+[
+    {
+        "name": "Compounder",
+        "class": "Trend A",
+        "ticker": "SPY",
+        "enable": true,
+        "enable_trades": false,
+        "budget": 10000.0,
+        "expected_rate": 0.105
+    },
+    {
+        "name": "Paycheck",
+        "class": "BWB A",
+        "ticker": "$SPX.X",
+        "enable": true,
+        "enable_trades": false,
+        "budget": 100000.0,
+        "target_premium_per_day": 0.5
+    }
+]
