@@ -453,7 +453,7 @@ def _maybe_place_stock_order(asset, quote_db, option_chain_db, backend_setting, 
     if quantity < 0: # Closing/scaling back long position.
         # Do not close position for worse than cost.
         min_sell_price = asset['ath'] * vacancy + min_price_offset
-        if price < compounded_unit_cost or price < required_trade_price:
+        if price < compounded_unit_cost or price < min_sell_price:
             logger.debug('{}: Abort trade: Price {} is worse than compounded unit cost {} ({} nominal); min_sell_price = {}.'.format(ticker, price, compounded_unit_cost, unit_cost, min_sell_price))
             return False
     # Place order and update position.
