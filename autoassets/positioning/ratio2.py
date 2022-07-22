@@ -363,18 +363,18 @@ def place_bullish_trade(asset, quote_db, option_chain_db, backend_setting):
     long_put = option_chain.loc[long_put_symbol]
     long_put_premium = long_put[autoassets.OptionContractField.ASK_PRICE]
     # Find short puts to finance long put.
-    target_premium = ((long_put_premium + (dte * asset['target_premium_per_day'])) / 2.0) + 2.0 * MAX_BUY_MARGIN_PREMIUM
-    logger.debug('{}: Target premium = {}; DTE = {}, long-put premium = {}.'.format(ticker, target_premium, dte, long_put_premium))
-    if target_premium < MIN_SELL_PREMIUM:
-        logger.debug('Abort trade (short put): Target premium {} is too low.'.format(target_premium))
+    target_short_premium = (long_put_premium + (dte * asset['target_premium_per_day']) + 2.0 * MAX_BUY_MARGIN_PREMIUM + 5.0 * (COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT)) / 2.0
+    logger.debug('{}: Target premium = {}; DTE = {}, long-put premium = {}.'.format(ticker, target_short_premium, dte, long_put_premium))
+    if target_short_premium < MIN_SELL_PREMIUM:
+        logger.debug('Abort trade (short put): Target premium {} is too low.'.format(target_short_premium))
         return False
     short_put_query = option_chain[
         (option_chain[autoassets.OptionContractField.OPEX] == opex) &
         (option_chain[autoassets.OptionContractField.CONTRACT_TYPE] == autoassets.OptionContractType.PUT) &
-        (option_chain[autoassets.OptionContractField.BID_PRICE] >= target_premium)
+        (option_chain[autoassets.OptionContractField.BID_PRICE] >= target_short_premium)
         ]
     if len(short_put_query) == 0:
-        logger.debug('Abort trade (short put): Cannot find premium at or above {}.'.format(target_premium))
+        logger.debug('Abort trade (short put): Cannot find premium at or above {}.'.format(target_short_premium))
         return False
     short_put_symbol = short_put_query[autoassets.OptionContractField.STRIKE].idxmin()
     if short_put_symbol == long_put_symbol:
@@ -466,17 +466,20 @@ def probe(asset, instrument_db, option_chain_db, quote_db, backend_setting):
     option_chain = option_chain_db[ticker]
     mark = quote_db[ticker][autoassets.QuoteField.MARK_PRICE]
     opex = option_chain[autoassets.OptionContractField.OPEX].iloc[0]
+    availability_specs = availability(asset, quote_db, option_chain_db)
+    denomination = availability_specs['denomination_long']
     def __closing_cb(leg_df, side_df, contract_df, position_df):
         symbol = contract_df[autoassets.OptionContractField.SYMBOL]
         contract_type = contract_df[autoassets.OptionContractField.CONTRACT_TYPE]
-        if position_df['quantity'] > 0: # Skip long contracts.
+        quantity = position_df['quantity']
+        if quantity > 0: # Skip long contracts.
             return False
         premium = contract_df[autoassets.OptionContractField.ASK_PRICE]
         # Buy back short contract for minimum premium.
-        if premium <= MAX_BUY_MARGIN_PREMIUM:
+        if premium <= MAX_BUY_MARGIN_PREMIUM and abs(quantity) > denomination:
             logger.info('Detected max-profit on contract; value={}:\n{}.'.format(premium, position_df))
             return _place_single_order(asset, backend_setting,
-                    quantity=-position_df['quantity'],
+                    quantity=(abs(quantity) - denomination),
                     contract_df=contract_df,
                     )
     #END: __closing_cb
