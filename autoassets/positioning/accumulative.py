@@ -447,7 +447,7 @@ def _maybe_place_stock_order(asset, quote_db, option_chain_db, backend_setting, 
     if follow_last_trade and position != 0 and 'last_trade_price' in asset: # Follow last trade.
         target_price = asset['last_trade_price'] - (sign_quantity * min_price_offset)
         if (sign_quantity * price) > (sign_quantity * target_price): # Price is worse than last trade.
-            logger.debug('{}: Abort trade: Price {} is worse than target {} (last_trade {}; min_delta {}).'.format(ticker, price, target_price, asset['last_trade_price'], min_price_offset))
+            logger.debug('{}: Abort trade: Price {} is worse than target {} (last_trade {}; min_price_offset {}; vacancy {}).'.format(ticker, price, target_price, asset['last_trade_price'], min_price_offset, vacancy))
             return False
     # Compare cost average versus candidate closing trade.
     if quantity < 0: # Closing/scaling back long position.

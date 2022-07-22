@@ -333,7 +333,6 @@ def place_bullish_trade(asset, quote_db, option_chain_db, backend_setting):
     logger.debug('Bullish vacancy = {}.'.format(vacancy))
     option_chain = option_chain_db[ticker]
     mark = quote_db[ticker][autoassets.QuoteField.MARK_PRICE]
-    #opex = option_chain[autoassets.OptionContractField.OPEX].iloc[0]
     # Check budget.
     if availability_specs['bullish_trades'] == 0:
         logger.debug('Abort trade: Zero bullish trades available.')
@@ -354,10 +353,10 @@ def place_bullish_trade(asset, quote_db, option_chain_db, backend_setting):
     long_put_query = option_chain[
         (option_chain[autoassets.OptionContractField.OPEX] == opex) &
         (option_chain[autoassets.OptionContractField.CONTRACT_TYPE] == autoassets.OptionContractType.PUT) &
-        (option_chain[autoassets.OptionContractField.DELTA] >= -0.16)
+        (option_chain[autoassets.OptionContractField.DELTA] >= -0.15)
         ]
     if len(long_put_query) == 0:
-        logger.debug('Abort trade (buy put): Cannot find put at or below 16 delta.')
+        logger.debug('Abort trade (buy put): Cannot find put at or below 15 delta.')
         return False
     long_put_symbol = long_put_query[autoassets.OptionContractField.STRIKE].idxmax()
     long_put = option_chain.loc[long_put_symbol]
@@ -382,7 +381,7 @@ def place_bullish_trade(asset, quote_db, option_chain_db, backend_setting):
         return False
     short_put = option_chain.loc[short_put_symbol]
     short_put_premium = short_put[autoassets.OptionContractField.BID_PRICE]
-    # Find long call to limit margin.
+    # Find long put to limit margin.
     margin_put_query = option_chain[
         (option_chain[autoassets.OptionContractField.OPEX] == opex) &
         (option_chain[autoassets.OptionContractField.CONTRACT_TYPE] == autoassets.OptionContractType.PUT) &
@@ -487,183 +486,6 @@ def probe(asset, instrument_db, option_chain_db, quote_db, backend_setting):
 # LOW-LEVEL API #
 #################
 
-def _close_profitable_longs(asset, option_chain, backend_setting, target_type=None, profit_target=1.0):
-    """
-    Close profitable/breakeven long contracts of specified type.
-
-    Parameters
-    ----------
-    asset: dict
-        Asset specifications.
-
-    option_chain: pd.DataFrame
-        Option chain.
-
-    backend_setting: dict
-        Backend setting.
-
-    target_type: autoassets.OptionContractType (default: any contract type)
-        Type of contract to close.
-
-    profit_target: float (default: 1.0, breakeven after slippage)
-        Fraction of cost per contract at which it is closed.
-    """
-    if 'leg_db' not in asset:
-        return
-    positioning = asset['definition']['positioning']
-    def __closing_cb(leg_df, side_df, contract_df, position_df):
-        contract_type = contract_df[autoassets.OptionContractField.CONTRACT_TYPE]
-        if (target_type is not None and contract_type != target_type) or position_df['quantity'] <= 0: # Wrong contract type or not a long contract.
-            return False
-        cum_quantity_df = _coverage(side_df)
-        coverage = int(cum_quantity_df.loc[contract_df.name]['quantity'])
-        cost_per_unit = (position_df['cost'] / (position_df['quantity'] * position_df['shares_per_contract']))
-        premium_per_unit = contract_df[autoassets.OptionContractField.BID_PRICE] * (1.0 - NONIDEAL_ADJUSTMENT_FRACTION) - position_df['quantity'] * (COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT)
-        target_premium_per_unit = profit_target * cost_per_unit
-        if coverage > 0 and target_premium_per_unit <= premium_per_unit: # Contract is profitable; close it.
-            logger.info('Closing profitable {} contract; cost_per_unit={}, target_premium_per_unit={}, premium_per_unit={}:\n{}.'.format(target_type, cost_per_unit, target_premium_per_unit, premium_per_unit, position_df))
-            adjusted = False
-            if 'hedge_symbol' in position_df and position_df['hedge_symbol'] != 'nan':
-                leg_df, call_df, put_df = _leg_dataframe(asset)
-                hedge_symbol = position_df['hedge_symbol']
-                hedge_position_df = None if hedge_symbol not in leg_df.index else leg_df.loc[hedge_symbol]
-                hedge_df = option_chain.loc[hedge_symbol]
-                if _place_single_order(asset, backend_setting,
-                        quantity=position_df['quantity'],
-                        contract_specs=(hedge_df, hedge_position_df),
-                        ):
-                    adjusted = True
-            return adjusted or _place_single_order(asset, backend_setting,
-                    quantity=-position_df['quantity'],
-                    contract_df=contract_df,
-                    )
-        return False
-    #END: _closing_cb
-    _scan_and_adjust(asset, option_chain, backend_setting, __closing_cb, sort_by='strike', ascending=False)
-#END: _close_profitable_longs
-
-def _close_profitable_or_uncovered_shorts(asset, option_chain, backend_setting, target_type=None, profit_target=1.0, loss_limit=2.0):
-    """
-    Close profitable/breakeven or uncovered short contracts of specified type.
-
-    Parameters
-    ----------
-    asset: dict
-        Asset specifications.
-
-    option_chain: pd.DataFrame
-        Option chain.
-
-    backend_setting: dict
-        Backend setting.
-
-    target_type: autoassets.OptionContractType (default: any contract type)
-        Type of contract to close.
-
-    profit_target: float (default: 1.0, breakeven after slippage)
-        Fraction of cost per contract at which any short contract is closed.
-
-    loss_limit: float (default: 2.0, twice premium received)
-        Fraction of cost per contract at which uncovered short contracts are closed.
-    """
-    if 'leg_db' not in asset:
-        return
-    positioning = asset['definition']['positioning']
-    def __closing_cb(leg_df, side_df, contract_df, position_df):
-        contract_type = contract_df[autoassets.OptionContractField.CONTRACT_TYPE]
-        if (target_type is not None and contract_type != target_type) or position_df['quantity'] >= 0: # Wrong contract type or not a short contract.
-            return False
-        cum_quantity_df = _coverage(side_df)
-        coverage = int(cum_quantity_df.loc[contract_df.name]['quantity'])
-        cost_per_unit = (position_df['cost'] / (position_df['quantity'] * position_df['shares_per_contract']))
-        premium_per_unit = contract_df[autoassets.OptionContractField.BID_PRICE] * (1.0 - NONIDEAL_ADJUSTMENT_FRACTION) - abs(position_df['quantity']) * (COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT)
-        target_premium_per_unit = max(MAX_BUY_MARGIN_PREMIUM, profit_target * cost_per_unit)
-        loss_premium_per_unit = loss_limit * cost_per_unit
-        if target_premium_per_unit >= premium_per_unit or (coverage < 0 and loss_premium_per_unit <= premium_per_unit): # Contract is profitable; close it.
-            target_quantity = abs(position_df['quantity']) if target_premium_per_unit >= premium_per_unit else abs(coverage)
-            logger.info('Closing {} contract; coverage={}, cost_per_unit={}, target_quantity={}, target_premium_per_unit={}, loss_premium_per_unit={}, premium_per_unit={}:\n{}.'.format(target_type, coverage, cost_per_unit, target_quantity, target_premium_per_unit, loss_premium_per_unit, premium_per_unit, position_df))
-            return  _place_single_order(asset, backend_setting,
-                    quantity=target_quantity,
-                    contract_specs=(contract_df, position_df),
-                    )
-        return False
-    #END: _closing_cb
-    _scan_and_adjust(asset, option_chain, backend_setting, __closing_cb, sort_by='strike', ascending=False)
-#END: _close_profitable_or_uncovered_shorts
-
-def _roll_profitable_longs(asset, option_chain, backend_setting, target_type=None):
-    """
-    Roll profitable/breakeven contracts of specified bias.
-
-    Parameters
-    ----------
-    asset: dict
-        Asset specifications.
-
-    option_chain: pd.DataFrame
-        Option chain.
-
-    backend_setting: dict
-        Backend setting.
-
-    target_type: autoassets.OptionContractType (default: any contract type)
-        Type of contract to close.
-    """
-    if 'leg_db' not in asset:
-        return
-    positioning = asset['definition']['positioning']
-    enable_trades = False if 'enable_trades' not in positioning else positioning['enable_trades']
-    def __adjustment_cb(leg_df, side_df, contract_df, position_df):
-        contract_type = contract_df[autoassets.OptionContractField.CONTRACT_TYPE]
-        if (target_type is not None and contract_type != target_type) or position_df['quantity'] <= 0: # Wrong contract type or not a long contract.
-            return False
-        cost_per_unit = (position_df['cost'] / (position_df['quantity'] * position_df['shares_per_contract']))
-        opex = position_df['opex']
-        target_premium_per_unit = 2.0 * cost_per_unit
-        premium_per_unit = contract_df[autoassets.OptionContractField.BID_PRICE] * (1.0 - NONIDEAL_ADJUSTMENT_FRACTION) - (COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT)
-        if target_premium_per_unit <= premium_per_unit: # Contract is profitable; roll it.
-            logger.info('Rolling profitable {} contract; cost_per_unit={}, target_premium_per_unit={}, premium_per_unit={}:\n{}.'.format(target_type, cost_per_unit, target_premium_per_unit, premium_per_unit, position_df))
-            target_ask_per_unit = cost_per_unit * (1.0 - NONIDEAL_ADJUSTMENT_FRACTION) - (COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT)
-            sell_specs = (contract_df, position_df)
-            if contract_type == autoassets.OptionContractType.CALL:
-                new_contract_filter = option_chain[
-                    (option_chain[autoassets.OptionContractField.OPEX] == opex) &
-                    (option_chain[autoassets.OptionContractField.CONTRACT_TYPE] == contract_type) &
-                    (option_chain[autoassets.OptionContractField.DELTA] >= MIN_LONG_DELTA) &
-                    (option_chain[autoassets.OptionContractField.ASK_PRICE] <= target_ask_per_unit)
-                    ]
-            elif contract_type == autoassets.OptionContractType.PUT:
-                new_contract_filter = option_chain[
-                    (option_chain[autoassets.OptionContractField.OPEX] == opex) &
-                    (option_chain[autoassets.OptionContractField.CONTRACT_TYPE] == contract_type) &
-                    (option_chain[autoassets.OptionContractField.DELTA] <= -MIN_LONG_DELTA) &
-                    (option_chain[autoassets.OptionContractField.ASK_PRICE] <= target_ask_per_unit)
-                    ]
-            if len(new_contract_filter) == 0:
-                logger.info('Abort roll: Cannot find target contract. Closing old contract instead.')
-                return _place_single_order(asset, backend_setting,
-                        quantity=-position_df['quantity'],
-                        contract_specs=sell_specs,
-                        )
-            if contract_type == autoassets.OptionContractType.CALL:
-                new_contract_symbol = new_contract_filter[autoassets.OptionContractField.STRIKE].idxmin()
-            elif contract_type == autoassets.OptionContractType.PUT:
-                new_contract_symbol = new_contract_filter[autoassets.OptionContractField.STRIKE].idxmax()
-            new_contract_df = option_chain.loc[new_contract_symbol]
-            new_position_df = None if new_contract_symbol not in leg_df.index else leg_df.loc[new_contract_symbol]
-            buy_specs = (new_contract_df, new_position_df)
-            return _place_spread_order(asset, backend_setting,
-                    quantity=position_df['quantity'],
-                    buy_specs=buy_specs,
-                    sell_specs=sell_specs,
-                    )
-        #else:
-        #    logger.debug('Trying to close {} contract; cost_per_unit={}, target_premium_per_unit={}, premium_per_unit={}:\n{}.'.format(target_bias, cost_per_unit, target_premium_per_unit, premium_per_unit, position_df))
-        return False
-    #END: __adjustment_cb
-    _scan_and_adjust(asset, option_chain, backend_setting, __adjustment_cb)
-#END: _roll_profitable_longs
-
 def _coverage(side_df):
     """
     Calculate coverage of positions.
@@ -683,92 +505,6 @@ def _coverage(side_df):
     side_filter = side_df.sort_values(by=['strike'], ascending=ascending)
     return side_filter[['quantity']].cumsum()
 #END: _coverage
-
-def _target_delta(mark, key_levels, bullish_bias):
-    """
-    Calculate target delta from market and key levels.
-
-    Parameters
-    ----------
-    mark: float
-        Current market value.
-
-    key_levels: list
-        Key price levels.
-
-    bullish_bias: bool
-        True if bullish, False if bearish.
-
-    Returns
-    -------
-    float:
-        Target delta.
-    """
-    #return (key_levels[3] - mark) / (4.0 * (key_levels[1] - key_levels[0]))
-    lower, upper = _target_key_range(mark, key_levels)
-    logger.debug('target key range = [{}, {}].'.format(lower, upper))
-    if upper <= key_levels[0]:
-        return MAX_LONG_DELTA if bullish_bias else 0.0
-    if lower >= key_levels[-1]:
-        return -MAX_LONG_DELTA if not bullish_bias else 0.0
-    if bullish_bias:
-        return MAX_LONG_DELTA * (upper - mark) / (upper - lower)
-    else:
-        return -MAX_LONG_DELTA * (mark - lower) / (upper - lower)
-#END: _target_delta
-
-def _target_key_level(mark, key_levels, bias=0):
-    """
-    Calculate target key level from market and key levels.
-
-    Parameters
-    ----------
-    mark: float
-        Current market value.
-
-    key_levels: list
-        Key price levels.
-
-    bias: int (default: 0)
-        Number specifying direction and magnitude in selection. Zero selects nearest key level.
-
-    Returns
-    -------
-    float:
-        Target key level.
-    """
-    idx, nearest = min(enumerate(key_levels), key=lambda x:abs(x[1]-mark))
-    if bias > 0 and mark < nearest:
-        idx -= 1
-    elif bias < 0 and mark > nearest:
-        idx += 1
-    select_idx = max(0, min(len(key_levels) - 1, idx + bias))
-    return key_levels[select_idx]
-#END: _target_key_level
-
-def _target_key_range(mark, key_levels):
-    """
-    Calculate target key range from market and key levels.
-
-    Parameters
-    ----------
-    mark: float
-        Current market value.
-
-    key_levels: list
-        Key price levels.
-
-    Returns
-    -------
-    (float, float):
-        Target key range (lower, upper).
-    """
-    idx, nearest = min(enumerate(key_levels), key=lambda x:abs(x[1]-mark))
-    if mark < nearest and idx > 0:
-        idx -= 1
-    other_idx = min(len(key_levels) - 1, idx + 1)
-    return (key_levels[idx], key_levels[other_idx])
-#END: _target_key_range
 
 def _init_leg(asset, leg):
     """
@@ -794,31 +530,6 @@ def _init_leg(asset, leg):
         'quantity': 0,
     }
 #END: _init_leg
-
-def _init_shadow_leg(asset, leg):
-    """
-    Initialize given shadow leg in asset.
-
-    Parameters
-    ----------
-    asset: dict
-        Asset specifications.
-
-    leg: pd.Series
-        Leg specifications.
-    """
-    if 'shadow_leg_db' not in asset:
-        asset['shadow_leg_db'] = {}
-    asset['shadow_leg_db'][leg.name] = {
-        'opex': leg[autoassets.OptionContractField.OPEX].isoformat(),
-        'strike': leg[autoassets.OptionContractField.STRIKE],
-        'contract_type': leg[autoassets.OptionContractField.CONTRACT_TYPE].value,
-        'shares_per_contract': UNITS_PER_CONTRACT,
-        'cost': 0.0,
-        'quantity': 0,
-        'maximum_price': 0.0,
-    }
-#END: _init_shadow_leg
 
 def _leg_dataframe(asset):
     """
@@ -854,184 +565,6 @@ def _leg_dataframe(asset):
     put_df = leg_df[leg_df['contract_type'] == autoassets.OptionContractType.PUT]
     return (leg_df, call_df, put_df)
 #END: _leg_dataframe
-
-def _shadow_leg_dataframe(asset):
-    """
-    Typecast asset's shadow legs to pd.DataFrame.
-
-    Parameters
-    ----------
-    asset: dict
-        Asset specifications.
-
-    Returns
-    -------
-    (pd.DataFrame, pd.DataFrame, pd.DataFrame):
-        Shadow leg dataframe indexed by contract symbol, call dataframe and put dataframe.
-    """
-    leg_df = pd.DataFrame.from_dict({} if 'shadow_leg_db' not in asset else asset['shadow_leg_db'],
-        orient='index',
-        columns=[
-            'opex',
-            'strike',
-            'contract_type',
-            'shares_per_contract',
-            'cost',
-            'quantity',
-            'maximum_price',
-        ])
-    leg_df.index.rename('symbol', inplace=True)
-    leg_df['opex'] = pd.to_datetime(leg_df['opex'])
-    leg_df['contract_type'] = leg_df['contract_type'].apply(autoassets.OptionContractType)
-    call_df = leg_df[leg_df['contract_type'] == autoassets.OptionContractType.CALL]
-    put_df = leg_df[leg_df['contract_type'] == autoassets.OptionContractType.PUT]
-    return (leg_df, call_df, put_df)
-#END: _shadow_leg_dataframe
-
-def _maybe_place_single_order(asset, backend_setting, quantity, contract_df):
-    """
-    Place a single-legged order if it fits the asset's budget and improves current position.
-
-    Parameters
-    ----------
-    asset: dict
-        Asset specifications.
-
-    backend_setting: dict
-        Backend setting.
-
-    quantity: int
-        Number of spreads to trade.
-
-    contract_df: pd.Series
-        Contract to trade.
-
-    Returns
-    -------
-    bool:
-        True if trade executed; False otherwise.
-    """
-    contract_type = contract_df[autoassets.OptionContractField.CONTRACT_TYPE]
-    if contract_type == autoassets.OptionContractType.UNSUPPORTED:
-        logger.debug('Abort trade: Unsupported contract type {}.'.format(contract_df))
-        return False
-    positioning = asset['definition']['positioning']
-    leg_df, call_df, put_df = _leg_dataframe(asset)
-    symbol = contract_df[autoassets.OptionContractField.SYMBOL]
-    logger.debug('Candidate single: {}.'.format(symbol))
-    if quantity > 0: # Buy order.
-        candidate_premium_per_unit = contract_df[autoassets.OptionContractField.ASK_PRICE]
-        slippage = candidate_premium_per_unit - contract_df[autoassets.OptionContractField.BID_PRICE]
-    elif quantity < 0: # Sell order.
-        candidate_premium_per_unit = contract_df[autoassets.OptionContractField.BID_PRICE]
-        slippage = contract_df[autoassets.OptionContractField.ASK_PRICE] - candidate_premium_per_unit
-    else: # No order.
-        logger.debug('BUG: Abort trade: Zero budget.')
-        return False
-    # Recall respective leg (if any) in asset.
-    position_df = None if symbol not in leg_df.index else leg_df.loc[symbol]
-    # Check against last trade.
-    if position_df is not None:
-        logger.debug('Abort trade: Already have position.')
-        return False
-    #if position_df is not None and 'last_trade_price' in position_df:
-    #    last_premium_per_unit = position_df['last_trade_price']
-    #    maximum_premium_per_unit = last_premium_per_unit * (1.0 - NONIDEAL_ADJUSTMENT_FRACTION) - abs(last_premium_per_unit / 2.0) - (slippage + (COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT))
-    #    if candidate_premium_per_unit >= maximum_premium_per_unit: # Want better premium for single.
-    #        logger.debug('Abort trade: Candidate premium/contract, {}, exceeds maximum premium/contract, {} (last premium/contract = {}).'.format(candidate_premium_per_unit, maximum_premium_per_unit, last_premium_per_unit))
-    #        return False
-    #contract_specs = (contract_df, position_df)
-    return _place_single_order(asset, backend_setting,
-            quantity=quantity,
-            contract_df=contract_df,
-            )
-#END: _maybe_place_single_order
-
-def _maybe_place_spread_order(asset, backend_setting, quantity, buy_df, sell_df):
-    """
-    Place a spread (two-legged) order if it improves current position, if any.
-
-    Parameters
-    ----------
-    asset: dict
-        Asset specifications.
-
-    backend_setting: dict
-        Backend setting.
-
-    quantity: int
-        Number of spreads to trade.
-
-    buy_df: pd.Series
-        Contract to buy.
-
-    sell_df: pd.Series
-        Contract to sell.
-
-    Returns
-    -------
-    bool:
-        True if trade executed; False otherwise.
-    """
-    if buy_df.equals(sell_df):
-        logger.debug('Abort trade: Zero spread.')
-        return False
-    contract_type = buy_df[autoassets.OptionContractField.CONTRACT_TYPE]
-    if contract_type != sell_df[autoassets.OptionContractField.CONTRACT_TYPE] or contract_type == autoassets.OptionContractType.UNSUPPORTED:
-        logger.debug('Abort trade: Mismatched contract types between long {} and short {}.'.format(buy_df, sell_df))
-        return False
-    positioning = asset['definition']['positioning']
-    last_trade_alpha = 2.0 if 'last_trade_alpha' not in positioning else positioning['last_trade_alpha']
-    leg_df, call_df, put_df = _leg_dataframe(asset)
-    long_symbol = buy_df[autoassets.OptionContractField.SYMBOL]
-    short_symbol = sell_df[autoassets.OptionContractField.SYMBOL]
-    logger.debug('Candidate spread: buy {}, sell {}'.format(long_symbol, short_symbol))
-    long_premium = buy_df[autoassets.OptionContractField.ASK_PRICE]
-    short_premium = sell_df[autoassets.OptionContractField.BID_PRICE]
-    long_slippage = long_premium - buy_df[autoassets.OptionContractField.BID_PRICE]
-    short_slippage = sell_df[autoassets.OptionContractField.ASK_PRICE] - short_premium
-    long_strike = buy_df[autoassets.OptionContractField.STRIKE]
-    short_strike = sell_df[autoassets.OptionContractField.STRIKE]
-    # Recall respective legs (if any) in asset.
-    long_position_df = None if long_symbol not in leg_df.index else leg_df.loc[long_symbol]
-    short_position_df = None if short_symbol not in leg_df.index else leg_df.loc[short_symbol]
-    # Check short-leg against last trade.
-    if short_position_df is not None:
-        logger.debug('Abort trade: Already have position.')
-        return False
-    #if short_position_df is not None and 'last_trade_price' in short_position_df:
-    #    last_premium_per_unit = short_position_df['last_trade_price']
-    ##    #lower_premium_per_unit = ((2.0 - (last_trade_alpha + 2.0 * NONIDEAL_ADJUSTMENT_FRACTION)) * last_premium_per_unit) - (long_slippage + short_slippage + (2.0 * COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT))
-    #    upper_premium_per_unit = ((last_trade_alpha + 2.0 * NONIDEAL_ADJUSTMENT_FRACTION) * last_premium_per_unit) + (long_slippage + short_slippage + (2.0 * COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT))
-    ##    #if short_premium > lower_premium_per_unit and short_premium < upper_premium_per_unit: # Want different premium from last trade.
-    ##    #    logger.debug('Abort trade: Candidate premium/unit, {}, unchanged from last trade range ([{}, {}]; (last premium/spread = {}).'.format(short_premium, lower_premium_per_unit, upper_premium_per_unit, last_premium_per_unit))
-    #    if short_premium < upper_premium_per_unit: # Want higher short-premium from last trade.
-    ##    if True:
-    #        logger.debug('Abort trade: Candidate premium/unit, {}, less than required, {} (last premium/spread = {}).'.format(short_premium, upper_premium_per_unit, last_premium_per_unit))
-    ##        logger.debug('Abort trade: Already have short position in {}.'.format(short_symbol))
-    ##        return False
-    ## Reuse existing long contracts when possible.
-    #df = call_df if contract_type == autoassets.OptionContractType.CALL else put_df
-    #sell_specs = (sell_df, short_position_df)
-    #if df['quantity'].sum() >= quantity: # There exists sufficient unused long contracts.
-    #    return _place_single_order(asset, backend_setting,
-    #            quantity=-quantity,
-    #            contract_specs=sell_specs,
-    #            )
-    #else:
-    #    buy_specs = (buy_df, long_position_df)
-    #    return _place_spread_order(asset, backend_setting,
-    #            quantity=quantity,
-    #            buy_specs=buy_specs,
-    #            sell_specs=sell_specs,
-    #            )
-    #buy_specs = (buy_df, long_position_df)
-    return _place_spread_order(asset, backend_setting,
-            quantity=quantity,
-            buy_specs=buy_df,
-            sell_specs=sell_df,
-            )
-#END: _maybe_place_spread_order
 
 def _place_single_order(asset, backend_setting, quantity, contract_df, hedged_symbol=None):
     """
