@@ -264,6 +264,7 @@ def neutralize(asset, quote_db, option_chain_db, backend_setting):
             return _place_single_order(asset, backend_setting,
                     quantity=-position_df['quantity'],
                     contract_df=contract_df,
+                    enable_trade=False, # "Close" for bookkeeping.
                     )
         return False
     #END: __closing_cb
@@ -566,7 +567,7 @@ def _leg_dataframe(asset):
     return (leg_df, call_df, put_df)
 #END: _leg_dataframe
 
-def _place_single_order(asset, backend_setting, quantity, contract_df, hedged_symbol=None):
+def _place_single_order(asset, backend_setting, quantity, contract_df, enable_trade=True):
     """
     Place a single-legged order.
 
@@ -584,8 +585,8 @@ def _place_single_order(asset, backend_setting, quantity, contract_df, hedged_sy
     contract_df: pd.Series
         Contract to trade.
 
-    hedged_symbol: str (optional)
-        Contract symbol that this order is hedging.
+    enable_trade: bool (default: True)
+        Whether to post this trade to the backend (True) or not (False).
 
     Returns
     -------
@@ -593,7 +594,7 @@ def _place_single_order(asset, backend_setting, quantity, contract_df, hedged_sy
         True if trade executed; False otherwise.
     """
     positioning = asset['definition']['positioning']
-    enable_trades = False if 'enable_trades' not in positioning else positioning['enable_trades']
+    enable_trades = False if 'enable_trades' not in positioning else (enable_trade and positioning['enable_trades'])
     leg_df, _, _ = _leg_dataframe(asset)
     symbol = contract_df[autoassets.OptionContractField.SYMBOL]
     position_df = None if symbol not in leg_df.index else leg_df.loc[symbol]
@@ -626,8 +627,6 @@ def _place_single_order(asset, backend_setting, quantity, contract_df, hedged_sy
     if symbol not in asset['leg_db']:
         _init_leg(asset, contract_df)
     asset_contract = asset['leg_db'][symbol]
-    if hedged_symbol is not None and hedged_symbol in asset['leg_db']:
-        asset['leg_db'][hedged_symbol]['hedge_symbol'] = symbol
     # Calculate profit, if closing contracts, and new cost.
     profit = 0.0
     cost = 0.0
@@ -663,7 +662,7 @@ def _place_single_order(asset, backend_setting, quantity, contract_df, hedged_sy
     return True
 #END: _place_single_order
 
-def _place_spread_order(asset, backend_setting, quantity, buy_df, sell_df):
+def _place_spread_order(asset, backend_setting, quantity, buy_df, sell_df, enable_trade=True):
     """
     Place a spread (two-legged) order.
 
@@ -684,13 +683,16 @@ def _place_spread_order(asset, backend_setting, quantity, buy_df, sell_df):
     sell_df: pd.Series
         Contract to sell.
 
+    enable_trade: bool (default: True)
+        Whether to post this trade to the backend (True) or not (False).
+
     Returns
     -------
     bool:
         True if trade executed; False otherwise.
     """
     positioning = asset['definition']['positioning']
-    enable_trades = False if 'enable_trades' not in positioning else positioning['enable_trades']
+    enable_trades = False if 'enable_trades' not in positioning else (enable_trade and positioning['enable_trades'])
     leg_df, _, _ = _leg_dataframe(asset)
     long_symbol = buy_df[autoassets.OptionContractField.SYMBOL]
     short_symbol = sell_df[autoassets.OptionContractField.SYMBOL]
