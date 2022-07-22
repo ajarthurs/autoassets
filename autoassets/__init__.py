@@ -124,6 +124,7 @@ class OptionContractType(Enum):
     """
     CALL = 'CALL'
     PUT  = 'PUT'
+    ALL  = '*'
     UNSUPPORTED = ''
 
     @classmethod
@@ -337,9 +338,10 @@ def fetch_option_chains(assets, quote_db):
             continue
         tickers = list(instruments['ticker'])
         ref_instrument = instruments.iloc[0]
+        contract_type = OptionContractType.ALL if 'contract_type' not in ref_instrument else ref_instrument['contract_type']
         max_dte = None if 'max_dte' not in ref_instrument else int(ref_instrument['max_dte'])
         strike_count = 0 if 'strike_count' not in ref_instrument else int(ref_instrument['strike_count'])
-        option_chain_db.update(backend.fetch_option_chains(tickers, quote_db, max_dte=max_dte, strike_count=strike_count))
+        option_chain_db.update(backend.fetch_option_chains(tickers, quote_db, contract_type=contract_type, max_dte=max_dte, strike_count=strike_count))
     return option_chain_db
 #END: fetch_option_chains
 

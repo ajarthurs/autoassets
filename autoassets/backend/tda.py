@@ -40,6 +40,7 @@ import time
 logger = logging.getLogger(__name__)
 
 # Bind classes/enumerations.
+OptionContractType = tda.api.OptionContractType
 InstrumentType = tda.InstrumentType
 WSQOSLevel = tda.streaming.WSQOSLevel
 
@@ -254,7 +255,7 @@ def fetch_historical_data(instrument):
     return df
 #END: fetch_historical_data
 
-def fetch_option_chains(tickers, quote_db, min_dte=None, max_dte=None, strike_count=0):
+def fetch_option_chains(tickers, quote_db, contract_type=autoassets.OptionContractType.ALL, min_dte=None, max_dte=None, strike_count=0):
     """
     Fetch option chains for tickers.
 
@@ -284,6 +285,7 @@ def fetch_option_chains(tickers, quote_db, min_dte=None, max_dte=None, strike_co
     to_date = None if max_dte is None else (date.today()+timedelta(days=max_dte))
     raw_option_chain_dict = tda.api.get_option_chains(
         tickers,
+        contract_type=OptionContractType(contract_type.value),
         from_date=from_date, to_date=to_date,
         strike_count=strike_count,
         )

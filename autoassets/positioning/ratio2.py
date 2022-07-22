@@ -185,6 +185,7 @@ def instruments(positioning, require_optionable=False):
     i = [{
         'backend': positioning['backend'],
         'ticker': positioning['ticker'],
+        'contract_type': positioning['contract_type'],
         'max_dte': positioning['max_dte'],
         'strike_count': positioning['strike_count'],
     }]
