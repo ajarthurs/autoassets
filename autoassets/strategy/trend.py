@@ -24,6 +24,8 @@
 Trend strategy.
 
 Sets buy and sell price targets over linear regression. Price targets depend on a reference price (`anchor_price`) and the instrument's volatility over a given frame (time- or volume-based).
+
+`alpha` is a signed coefficient applied to trades available. For example, an `alpha` of 1.0 (default) applies nominal resistance to exhaustion, meaning that the strategy will target prices further away from the reference price as fewer trades become available. A higher `alpha` increases the 'resistance to exhaustion' effect, which can lead towards half-invested assets. An `alpha` of zero (0) disables the 'resistance to exhaustion' feature. Finally, a negative `alpha` accelerates exhaustion.
 """
 
 import autoassets.positioning
@@ -104,9 +106,10 @@ def execute(asset, instrument_db, option_chain_db, quote_db, backend_setting):
     current_price = history.iloc[0][autoassets.ChartBarField.CLOSE_PRICE]
     previous_price = history.iloc[1][autoassets.ChartBarField.CLOSE_PRICE]
     min_price_offset = max(linear_residual, 0.0001 * current_price)
-    logger.debug('{}: mark = {}; anchor_price = {}; window_ydelta = {}; channel_width = {}; min_price_offset = {}; slope = {}'.format(ticker, current_price, anchor_price, window_ydelta, channel_width, min_price_offset, slope))
-    sell_pt = anchor_price + min_price_offset
-    buy_pt = anchor_price - min_price_offset
+    alpha = 1.0 if 'alpha' not in strategy else strategy['alpha']
+    sell_pt = anchor_price + min_price_offset * (1.0 + alpha * availability['bullish_vacancy'])
+    buy_pt = anchor_price - min_price_offset * (1.0 + alpha * availability['bearish_vacancy'])
+    logger.debug('{}: mark = {}; sell_pt = {}, buy_pt = {}; anchor_price = {}; window_ydelta = {}; channel_width = {}; min_price_offset = {}; slope = {}'.format(ticker, current_price, sell_pt, buy_pt, anchor_price, window_ydelta, channel_width, min_price_offset, slope))
     if previous_price > sell_pt and current_price <= sell_pt: # SELL ZONE
         logger.debug('SELL {}'.format(ticker))
         autoassets.positioning.place_bearish_trade(asset, quote_db, option_chain_db, backend_setting)
