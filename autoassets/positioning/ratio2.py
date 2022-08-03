@@ -338,14 +338,15 @@ def place_bullish_trade(asset, quote_db, option_chain_db, backend_setting):
     if availability_specs['bullish_trades'] == 0:
         logger.debug('Abort trade: Zero bullish trades available.')
         return False
-    # Check for beyond-DTE0 position; otherwise, determine nearest OPEX in which to open new position.
+    # Check for uncovered short-puts opened as part of a previous backratio trade.
     leg_df, call_df, put_df = _leg_dataframe(asset)
     now = pd.to_datetime('now', utc=True)
     tomorrow = now + pd.to_timedelta(1, 'D')
-    duration_put_df = [] if len(put_df) == 0 else put_df[put_df['opex'] >= tomorrow]
-    if len(duration_put_df) > 0:
-        logger.debug('Abort trade: Already have duration position.')
+    uncovered_short_put_df = [] if len(put_df) == 0 else put_df[put_df['quantity'] < (-denomination)]
+    if len(uncovered_short_put_df) > 0:
+        logger.debug('Abort trade: Uncovered short-puts present.')
         return False
+    # Determine nearest OPEX in which to open new position.
     duration_option_chain = option_chain[option_chain[autoassets.OptionContractField.OPEX] >= tomorrow]
     nearest_contract = duration_option_chain.sort_values(by=autoassets.OptionContractField.OPEX, ascending=True).iloc[0]
     opex = nearest_contract[autoassets.OptionContractField.OPEX]
