@@ -41,14 +41,11 @@ UNITS_PER_CONTRACT = 100 #XXX: Covers majority of options contracts, but conside
 COMMISSION_PER_CONTRACT = 1.15 #dollars
 NONIDEAL_ADJUSTMENT_FRACTION = 0.0 # fraction of premium
 MIN_LONG_DELTA = 0.03
-#MAX_LONG_DELTA = 1.0 - MIN_LONG_DELTA
+MAX_LONG_DELTA = 1.0 - MIN_LONG_DELTA
 MAX_LONG_DELTA = 0.50
 MAX_BUY_MARGIN_PREMIUM = 0.15
-MIN_COST_PREMIUM = 0.05 + MAX_BUY_MARGIN_PREMIUM
+MIN_COST_PREMIUM = MAX_BUY_MARGIN_PREMIUM
 MIN_SELL_PREMIUM = 3.0 * MIN_COST_PREMIUM # 1x to cover cost, 2x to cover inefficiency and 3x for profit.
-LONG_PROFIT_TARGET = 0.5
-SHORT_PROFIT_TARGET = 0.50
-SHORT_LOSS_LIMIT = 2.0 - SHORT_PROFIT_TARGET
 
 def availability(asset, quote_db, option_chain_db):
     """
@@ -793,7 +790,7 @@ def _place_spread_order(asset, backend_setting, quantity, buy_df, sell_df, enabl
     return True
 #END: _place_spread_order
 
-def _scan_and_adjust(asset, option_chain, backend_setting, adjustment_cb, sort_by='quantity', ascending=True, scan_shadow_db=False):
+def _scan_and_adjust(asset, option_chain, backend_setting, adjustment_cb, sort_by='quantity', ascending=True):
     """
     Scan and adjust contracts according to callback function.
 
@@ -834,14 +831,8 @@ def _scan_and_adjust(asset, option_chain, backend_setting, adjustment_cb, sort_b
 
     ascending: bool (default: True)
         Whether to sort positions in ascending (True) or descending (False) order.
-
-    scan_shadow_db: bool (default: False)
-        Whether to scan primary leg database (False) or shadow leg database (True).
     """
-    if scan_shadow_db:
-        leg_df, call_df, put_df = _shadow_leg_dataframe(asset)
-    else:
-        leg_df, call_df, put_df = _leg_dataframe(asset)
+    leg_df, call_df, put_df = _leg_dataframe(asset)
     positioning = asset['definition']['positioning']
     for side_df in (call_df, put_df): # Scan call- and put-side separately.
         while True:
@@ -857,10 +848,7 @@ def _scan_and_adjust(asset, option_chain, backend_setting, adjustment_cb, sort_b
                 contract = option_chain.loc[symbol]
                 contract_adjusted = adjustment_cb(leg_df, side_df, contract, position_df)
                 if contract_adjusted: # Update side dataframe, break out of leg loop.
-                    if scan_shadow_db:
-                        leg_df, call_df, put_df = _shadow_leg_dataframe(asset)
-                    else:
-                        leg_df, call_df, put_df = _leg_dataframe(asset)
+                    leg_df, call_df, put_df = _leg_dataframe(asset)
                     side_df = call_df if contract_type == autoassets.OptionContractType.CALL else put_df
                     break
             if not contract_adjusted: # No contracts adjusted on this side; continue to next side.
