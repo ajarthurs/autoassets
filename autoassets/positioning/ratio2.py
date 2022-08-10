@@ -46,6 +46,7 @@ MAX_LONG_DELTA = 0.50
 MAX_BUY_MARGIN_PREMIUM = 0.15
 MIN_COST_PREMIUM = MAX_BUY_MARGIN_PREMIUM
 MIN_SELL_PREMIUM = 3.0 * MIN_COST_PREMIUM # 1x to cover cost, 2x to cover inefficiency and 3x for profit.
+TARGET_MAX_PROFIT_FRACTION = 0.95
 
 def availability(asset, quote_db, option_chain_db):
     """
@@ -463,21 +464,52 @@ def probe(asset, instrument_db, option_chain_db, quote_db, backend_setting):
     ticker = positioning['ticker']
     option_chain = option_chain_db[ticker]
     mark = quote_db[ticker][autoassets.QuoteField.MARK_PRICE]
-    opex = option_chain[autoassets.OptionContractField.OPEX].iloc[0]
     availability_specs = availability(asset, quote_db, option_chain_db)
     denomination = availability_specs['denomination_long']
+    logger.debug('Probe {}: mark = {}.'.format(ticker, mark))
     def __closing_cb(leg_df, side_df, contract_df, position_df):
-        symbol = contract_df[autoassets.OptionContractField.SYMBOL]
-        contract_type = contract_df[autoassets.OptionContractField.CONTRACT_TYPE]
         quantity = position_df['quantity']
         if quantity > 0: # Skip long contracts.
             return False
+        symbol = contract_df[autoassets.OptionContractField.SYMBOL]
+        contract_type = contract_df[autoassets.OptionContractField.CONTRACT_TYPE]
+        opex = position_df['opex']
+        strike = position_df['strike']
         premium = contract_df[autoassets.OptionContractField.ASK_PRICE]
+        uncovered_quantity = abs(quantity) - denomination
+        # Close backratio/vertical put position if it is near maximum profit.
+        long_put_query = side_df[
+            (side_df['quantity'] > 0) &
+            (side_df['opex'] == opex) &
+            (side_df['strike'] > strike)
+        ]
+        if len(long_put_query) > 0:
+            long_put_symbol = long_put_query['strike'].idxmax()
+            long_put_contract_df = option_chain.loc[long_put_symbol]
+            long_put_position_df = side_df.loc[long_put_symbol]
+            long_put_strike = long_put_contract_df[autoassets.OptionContractField.STRIKE]
+            long_put_premium = long_put_contract_df[autoassets.OptionContractField.BID_PRICE]
+            long_put_quantity = long_put_position_df['quantity']
+            max_profit_per_unit = long_put_quantity * (long_put_strike - strike)
+            actual_max_profit_per_unit = TARGET_MAX_PROFIT_FRACTION * max_profit_per_unit
+            profit_per_unit = long_put_quantity * long_put_premium - abs(quantity) * premium - (long_put_quantity + abs(quantity)) * (COMMISSION_PER_CONTRACT / UNITS_PER_CONTRACT)
+            if (uncovered_quantity > 0 and mark <= strike and profit_per_unit > 0.0) or (uncovered_quantity == 0 and profit_per_unit >= actual_max_profit_per_unit):
+                logger.info('Detected max-profit on backratio/vertical position; mark={}; profit={}, max_profit={} (actual={}):\n{}\n{}.'.format(mark, profit_per_unit, max_profit_per_unit, actual_max_profit_per_unit, long_put_position_df, position_df))
+                if not _place_single_order(asset, backend_setting,
+                        quantity=uncovered_quantity,
+                        contract_df=contract_df,
+                        ):
+                    return False
+                return _place_spread_order(asset, backend_setting,
+                        quantity=long_quantity,
+                        buy_df=contract_df,
+                        sell_df=long_put_contract_df,
+                        )
         # Buy back short contract for minimum premium.
         if premium <= MAX_BUY_MARGIN_PREMIUM and abs(quantity) > denomination:
             logger.info('Detected max-profit on contract; value={}:\n{}.'.format(premium, position_df))
             return _place_single_order(asset, backend_setting,
-                    quantity=(abs(quantity) - denomination),
+                    quantity=uncovered_quantity,
                     contract_df=contract_df,
                     )
     #END: __closing_cb
