@@ -5,7 +5,7 @@
 # Aaron Arthurs ("the Author") to facilitate development and execution
 # across a variety of trade strategies at the user's discretion.
 # 
-# Copyright (c) 2020-2022, Aaron Arthurs <aajarthurs@gmail.com>
+# Copyright (c) 2020-present, Aaron Arthurs <aajarthurs@gmail.com>
 # 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
